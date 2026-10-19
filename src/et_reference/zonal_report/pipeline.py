@@ -45,10 +45,13 @@ def run(settings: ZonalSettings) -> ZonalOutputs:
              viloyat, len(catalog.refs), "/".join(catalog.variables), catalog.months)
 
     stack = load_raster_stack(catalog, settings.nodata)
+    log.info("Shp o'qilmoqda va CRS moslanmoqda (katta fayl bo'lsa, bir necha soniya/daqiqa)...")
     fields = load_fields(
         settings.shp_path, stack.grid.crs, area_crs=settings.area_crs, crop_column=settings.crop_column
     )
+    log.info("Dala ↔ piksel ulushlari hisoblanmoqda (%d ta dala)...", len(fields.geometries))
     weights = build_pixel_weights(fields.geometries, stack.grid)
+    log.info("Zonal statistika: %d ta raster...", len(stack.arrays))
     table = compute_field_table(stack, weights, fields.area_m2, settings.max_fill_pixels)
 
     area_ha = pd.Series(fields.area_m2 / 10_000.0)
@@ -63,6 +66,7 @@ def run(settings: ZonalSettings) -> ZonalOutputs:
                 table.values, area_ha, fields.crop.reset_index(drop=True), variable, months
             )
 
+    log.info("Shp va Excel yozilmoqda...")
     shp_path = write_shapefile(
         fields.frame, table, area_ha.to_numpy(), out_dir / f"{viloyat}_ET_zonal.shp", settings.nodata
     )

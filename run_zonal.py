@@ -28,8 +28,25 @@ VILOYAT = None        # RASTER_PATH ichida bir nechta viloyat bo'lsagina kerak, 
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
+
+
+def _configure_gdal_data() -> None:
+    """VS Code'da env aktivlashtirilmagan python.exe bilan ishga tushirilganda GDAL_DATA bo'lmaydi
+    ("Cannot find gdalvrt.xsd" ogohlantirishlari). Conda muhiti ichidan topib beramiz.
+    Rasterio/pyogrio import qilinishidan OLDIN o'rnatilishi kerak."""
+    if os.environ.get("GDAL_DATA"):
+        return
+    prefix = Path(sys.prefix)
+    for candidate in (prefix / "Library" / "share" / "gdal", prefix / "share" / "gdal"):
+        if (candidate / "gdalvrt.xsd").is_file():
+            os.environ["GDAL_DATA"] = str(candidate)
+            return
+
+
+_configure_gdal_data()
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))  # paket o'rnatilmagan bo'lsa ham ishlaydi
