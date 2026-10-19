@@ -15,6 +15,9 @@ dependencies:
   - geopandas
   - pyogrio
   - shapely
+  - pyproj
+  - scipy
+  - openpyxl
   - pyyaml
   - requests
   - pytest

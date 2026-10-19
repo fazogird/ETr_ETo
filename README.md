@@ -92,3 +92,36 @@ python -m et_reference run --viloyat Fargona --skip-download   :: faqat keshdan,
 ```
 
 Agar CDS so'rovni hajmi katta deb rad etsa, `config/settings.yaml` da `cds.split_by_variable: true` qiling.
+
+---
+
+## Zonal statistika: ekin dalalari bo'yicha ETr/ETo (shp + Excel)
+
+Tayyor oylik rasterlar (`Fargona_ETr_2026_03.tif` ...) va ekin dalalari shp'idan har bir dala uchun mm → m³ → m³/ga hisoblaydi.
+
+**1.** [`run_zonal.py`](run_zonal.py) ning tepasidagi yo'llarni yozing:
+
+```python
+SHP_PATH = r"D:\dalalar\fargona_ekin.shp"
+RASTER_PATH = r"D:\Cloud_comp\additional_task_claude_github\outputs"   # <Viloyat>_ETr_<yil>_<oy>.tif / ..._ETo_... lar shu yerda
+OUTPUT_PATH = r"D:\Cloud_comp\additional_task_claude_github\hisobot"
+CROP_COLUMN = "turi"   # ekin turi ustuni; boshqa nom yozish yoki None qilish mumkin
+```
+
+**2.** `python run_zonal.py`
+
+Natija `OUTPUT_PATH\<Viloyat>\` ichida (viloyat nomi raster fayl nomidan olinadi):
+
+| Fayl | Mazmuni |
+|---|---|
+| `<Viloyat>_ET_zonal.shp` | Asl shp (CRS i o'zgarmaydi) + har oy uchun `ETr3_mm`, `ETr3_m3`, `ETr3_m3ha` (ETo ham), mavsum yig'indisi `ETr_mm`, `ETr_m3`, `ETr_m3ha`, `area_ga`, `ET_QC` |
+| `<Viloyat>_ET_hisobot.xlsx` | `ETr`, `ETo`: oylar va **JAMI** bo'yicha dalalar soni, maydon (ga), m³, mm, m³/ga. `ETr_tur`, `ETo_tur`: ekin turi bo'yicha (CROP_COLUMN bo'lsa). `Sifat`: CRS, maydon, NoData holatlari |
+
+**Qanday ishlaydi**
+- **CRS:** raster o'zgarmaydi; shp rasterning CRS iga o'tkaziladi (qayta namunalash qiymatni buzmaydi).
+- **Zonal:** dala ichidagi piksellar bo'yicha, dalaning har pikselga tushgan **yuza ulushi** bilan vaznli o'rtacha mm.
+- **Maydon:** shp'dagi tayyor ustun ishlatilmaydi (CRS i noma'lum). Maydon teng-maydonli **EPSG:6933** da hisoblanadi, shuning uchun viloyatga qarab zona tanlash shart emas. `AREA_CRS = "utm"` yoki aniq EPSG ham berish mumkin. Tayyor ustun bo'lsa, `Sifat` varag'ida birligi (ga yoki m²) aniqlanadi.
+- **O'tkazish:** `m³ = mm/1000 × maydon(m²)`, `m³/ga = m³ / maydon(ga)` (= mm × 10).
+- **Excel o'rtachasi:** mm va m³/ga = jami m³ / hisobga olingan dalalar maydoni (maydon bo'yicha vaznli).
+- **NoData:** dala to'liq NoData'ga tushsa, 2 piksel ichidagi eng yaqin yaroqli piksel olinadi, aks holda qiymat `-9999`. Holat `ET_QC` da: 0 to'liq yaroqli, 1 qisman NoData, 2 to'ldirilgan, 3 qiymat yo'q.
+- Shp ustun nomlari 10 belgigacha (DBF limiti); mavsum yig'indisi biror oy yetishmasa `-9999`.
