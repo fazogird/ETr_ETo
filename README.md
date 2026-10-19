@@ -30,7 +30,19 @@ conda activate et-reference
 ```
 
 > `conda` (conda-forge) GDAL/rasterio ni Windows da eng ishonchli o'rnatadi.
-> pip bilan o'rnatish ham mumkin: `pip install -e .[dev]`.
+
+**Conda serverlariga ulanib bo'lmasa** (`CondaHTTPError: HTTP 000 CONNECTION FAILED`), pip bilan o'rnating.
+Barcha kutubxonalarning (rasterio, geopandas, netCDF4) PyPI da Windows uchun tayyor paketlari bor:
+
+```bat
+cd /d D:\Cloud_comp\additional_task_claude_github\additional_tasks
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+Keyingi safar faqat `.venv\Scripts\activate` buyrug'ini berish yetarli.
 
 ## 2. CDS API kaliti: qayerda va qanday saqlanadi
 
