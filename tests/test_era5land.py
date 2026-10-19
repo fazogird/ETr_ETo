@@ -1,13 +1,17 @@
+import zipfile
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from et_reference.ingestion.archive import HourlyArchive, normalize_era5_dataset
 from et_reference.ingestion.era5land import (
     VARIABLES,
     CdsDownloader,
+    DownloadError,
     area_from_bounds,
     plan_requests,
 )
@@ -78,6 +82,55 @@ def test_downloader_skips_cached_files(tmp_path):
     paths = CdsDownloader(client, "reanalysis-era5-land", tmp_path).fetch(requests)
     assert client.calls == [("reanalysis-era5-land", "04")]
     assert all(p.is_file() for p in paths)
+    assert not list(tmp_path.glob("*.part"))
+
+
+class ZipClient:
+    """Yangi CDS kabi: lahzalik va yig'ilgan o'zgaruvchilarni ZIP ichida alohida .nc qilib beradi."""
+
+    def __init__(self, fail_month=None):
+        self.fail_month = fail_month
+
+    def retrieve(self, dataset, request, target):
+        if request["month"] == self.fail_month:
+            raise RuntimeError("CDS: 400 Bad Request")
+        year, month = int(request["year"]), int(request["month"])
+        days = [int(d) for d in request["day"]]
+        times = pd.date_range(
+            pd.Timestamp(year=year, month=month, day=days[0]),
+            pd.Timestamp(year=year, month=month, day=days[-1], hour=23),
+            freq="h",
+        )
+        ds = synthetic_hourly(times)
+        workdir = Path(target).parent
+        instant = workdir / "data_stream-oper_stepType-instant.nc"
+        accum = workdir / "data_stream-oper_stepType-accum.nc"
+        ds.drop_vars("ssrd").to_netcdf(instant)
+        ds[["ssrd"]].to_netcdf(accum)
+        with zipfile.ZipFile(target, "w") as archive:
+            archive.write(instant, instant.name)
+            archive.write(accum, accum.name)
+        instant.unlink()
+        accum.unlink()
+
+
+def test_downloader_merges_cds_zip(tmp_path):
+    requests = plan_requests(date(2026, 3, 1), date(2026, 3, 2), AREA)
+    (path,) = CdsDownloader(ZipClient(), "reanalysis-era5-land", tmp_path).fetch(requests)
+    with xr.open_dataset(path) as ds:
+        assert {"t2m", "d2m", "u10", "v10", "ssrd", "sp"} <= set(ds.data_vars)
+        assert ds.sizes["valid_time"] == 48
+    assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
+
+
+def test_failed_month_does_not_stop_others(tmp_path):
+    requests = plan_requests(date(2026, 3, 1), date(2026, 5, 31), AREA)
+    downloader = CdsDownloader(ZipClient(fail_month="04"), "reanalysis-era5-land", tmp_path)
+    with pytest.raises(DownloadError, match="2026-04"):
+        downloader.fetch(requests)
+    assert (tmp_path / requests[0].filename).is_file()
+    assert not (tmp_path / requests[1].filename).exists()
+    assert (tmp_path / requests[2].filename).is_file()
     assert not list(tmp_path.glob("*.part"))
 
 

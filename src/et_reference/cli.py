@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_pipeline(settings, download=not args.skip_download)
         log.info("Hisobot: %s", result.summary_file)
         return 0
-    except (CredentialsError, OSError, ValueError) as exc:  # OSError: fayl va tarmoq xatolari
+    except (RuntimeError, OSError, ValueError) as exc:  # kalit, yuklash, fayl va tarmoq xatolari
         log.error("%s", exc)
         return 1
 

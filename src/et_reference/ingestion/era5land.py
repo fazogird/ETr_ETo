@@ -5,11 +5,15 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import tempfile
+import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+
+import xarray as xr
 
 from ..credentials import CdsCredentials
 
@@ -100,8 +104,46 @@ def area_from_bounds(
     )
 
 
+class DownloadError(RuntimeError):
+    """Bir yoki bir nechta CDS so'rovi bajarilmadi."""
+
+
+def finalize_download(partial: Path, target: Path) -> None:
+    """Yuklangan faylni `target` ga joylaydi.
+
+    Yangi CDS lahzalik va yig'ilgan o'zgaruvchilarni (stepType) alohida .nc fayllarga
+    ajratib, ZIP qilib qaytarishi mumkin. Bunday holda ular bitta NetCDF ga birlashtiriladi.
+    """
+    if not zipfile.is_zipfile(partial):
+        partial.replace(target)
+        return
+    merged_partial = target.with_name(target.name + ".merge.part")
+    with zipfile.ZipFile(partial) as archive, tempfile.TemporaryDirectory(dir=target.parent) as tmp:
+        members = [name for name in archive.namelist() if name.endswith(".nc")]
+        if not members:
+            raise DownloadError(f"CDS arxivida .nc fayl yo'q: {archive.namelist()}")
+        archive.extractall(tmp, members)
+        datasets = [xr.open_dataset(Path(tmp) / name) for name in members]
+        try:
+            merged = xr.merge(datasets, compat="override", combine_attrs="drop_conflicts")
+            merged.to_netcdf(merged_partial)
+        except Exception:
+            merged_partial.unlink(missing_ok=True)
+            raise
+        finally:
+            for ds in datasets:  # Windows: vaqtinchalik papka o'chishidan oldin fayllar yopilishi shart
+                ds.close()
+    log.info("CDS ZIP (%d ta fayl) bitta NetCDF ga birlashtirildi", len(members))
+    merged_partial.replace(target)
+    partial.unlink()
+
+
 class CdsDownloader:
-    """So'rovlarni ketma-ket bajaradi; tayyor fayllar qayta yuklanmaydi."""
+    """So'rovlarni ketma-ket bajaradi; tayyor fayllar qayta yuklanmaydi.
+
+    Bitta so'rov xato bersa ham qolganlari davom etadi, oxirida umumiy xato chiqariladi.
+    Keyingi ishga tushirishda faqat yetishmagan oylar yuklanadi.
+    """
 
     def __init__(self, client: Any, dataset: str, target_dir: Path) -> None:
         self._client = client
@@ -125,21 +167,33 @@ class CdsDownloader:
 
     def fetch(self, requests: Sequence[Era5Request]) -> list[Path]:
         self._target_dir.mkdir(parents=True, exist_ok=True)
-        paths = []
+        paths, failed = [], []
         for index, request in enumerate(requests, start=1):
             target = self._target_dir / request.filename
             paths.append(target)
             if target.is_file() and target.stat().st_size > 0:
                 log.info("[%d/%d] keshda bor: %s", index, len(requests), target.name)
                 continue
+            label = f"{request.year}-{request.month:02d}"
             log.info(
-                "[%d/%d] CDS so'rovi: %d-%02d, kunlar %02d–%02d, %d ta o'zgaruvchi",
-                index, len(requests), request.year, request.month,
-                request.days[0], request.days[-1], len(request.variables),
+                "[%d/%d] CDS so'rovi: %s, kunlar %02d–%02d, %d ta o'zgaruvchi (navbat kutilmoqda...)",
+                index, len(requests), label, request.days[0], request.days[-1], len(request.variables),
             )
             partial = target.with_name(target.name + ".part")
-            self._client.retrieve(self._dataset, request.to_cds(), str(partial))
-            partial.replace(target)
+            try:
+                self._client.retrieve(self._dataset, request.to_cds(), str(partial))
+                finalize_download(partial, target)
+            except Exception as exc:  # noqa: BLE001 — bitta oy xatosi qolganlarini to'xtatmasin
+                log.error("[%d/%d] %s yuklanmadi: %s", index, len(requests), label, exc)
+                failed.append(label)
+                partial.unlink(missing_ok=True)
+                continue
+            log.info("[%d/%d] %s tayyor: %s", index, len(requests), label, target.name)
+        if failed:
+            raise DownloadError(
+                f"{len(failed)} ta so'rov bajarilmadi ({', '.join(failed)}). "
+                "Qayta ishga tushiring — tayyor oylar keshdan olinadi."
+            )
         return paths
 
 
