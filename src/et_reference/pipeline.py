@@ -25,7 +25,13 @@ from .config import Settings
 from .credentials import load_cds_credentials
 from .ingestion.archive import HourlyArchive
 from .ingestion.boundaries import download_geoboundaries, load_boundaries
-from .ingestion.era5land import CdsDownloader, Era5Request, area_from_bounds, plan_requests
+from .ingestion.era5land import (
+    CdsDownloader,
+    Era5Request,
+    area_from_bounds,
+    find_cached,
+    plan_requests,
+)
 from .output.rasters import GridSpec, grid_from_coords, region_mask, write_geotiff
 from .output.tables import with_totals, write_table
 from .preprocessing.daily import build_daily
@@ -65,7 +71,7 @@ def load_admin_units(settings: Settings) -> gpd.GeoDataFrame:
 
 
 def plan(settings: Settings, units: gpd.GeoDataFrame) -> list[Era5Request]:
-    """Respublika bo'yicha bitta kesh: istalgan viloyat va davr shu fayllardan olinadi."""
+    """Faqat tanlangan birliklar hududi (zaxira bilan) uchun CDS so'rovlari."""
     area = settings.region.area or area_from_bounds(
         units.total_bounds, settings.region.area_buffer_deg
     )
@@ -82,9 +88,19 @@ def obtain_hourly_files(
     download: bool,
     client_factory: Callable[..., Any] | None = None,
 ) -> list[Path]:
-    """Keshdagi fayllarni qaytaradi; yetishmaganlarini (ruxsat bo'lsa) CDS dan yuklaydi."""
+    """Keshdagi fayllarni qaytaradi (kattaroq hududli fayllar ham qayta ishlatiladi);
+    yetishmaganlarini (ruxsat bo'lsa) CDS dan yuklaydi."""
     target_dir = settings.paths.hourly
-    missing = [r for r in requests if not (target_dir / r.filename).is_file()]
+    paths, missing = [], []
+    for request in requests:
+        cached = find_cached(request, target_dir) if target_dir.is_dir() else None
+        if cached is None:
+            missing.append(request)
+        else:
+            paths.append(cached)
+            if cached.name != request.filename:
+                log.info("%d-%02d: keshdagi kattaroq fayl ishlatiladi (%s)",
+                         request.year, request.month, cached.name)
     if missing:
         if not download:
             raise FileNotFoundError(
@@ -96,8 +112,8 @@ def obtain_hourly_files(
         downloader = CdsDownloader.from_credentials(
             credentials, settings.cds.dataset, target_dir, client_factory
         )
-        downloader.fetch(missing)
-    return [target_dir / r.filename for r in requests]
+        paths.extend(downloader.fetch(missing))
+    return paths
 
 
 def compute_daily_et(daily: xr.Dataset, min_wind_speed: float) -> dict[str, xr.DataArray]:
@@ -152,10 +168,11 @@ def run(
         "Hudud: %s | davr: %s … %s | vaqt zonasi: %s",
         label, settings.period.start, settings.period.end, settings.region.timezone,
     )
-    requests = plan(settings, units)
+    requests = plan(settings, selected)
+    log.info("Yuklash hududi [N, W, S, E]: %s", list(requests[0].area))
     files = obtain_hourly_files(settings, requests, download=download, client_factory=client_factory)
 
-    archive = HourlyArchive(files)
+    archive = HourlyArchive(files, area=requests[0].area)
     try:
         daily = build_daily(
             archive,

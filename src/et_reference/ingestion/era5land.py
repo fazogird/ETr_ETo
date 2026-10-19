@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import re
 import tempfile
 import zipfile
 from collections.abc import Callable, Sequence
@@ -16,6 +17,7 @@ from typing import Any
 import xarray as xr
 
 from ..credentials import CdsCredentials
+from .archive import file_covers_area
 
 log = logging.getLogger(__name__)
 
@@ -40,15 +42,17 @@ class Era5Request:
     area: tuple[float, float, float, float]  # N, W, S, E
 
     @property
-    def filename(self) -> str:
+    def tag(self) -> str:
         if set(self.variables) == set(VARIABLES):
-            tag = "all"
-        else:
-            tag = "-".join(VARIABLES[v] for v in self.variables)
+            return "all"
+        return "-".join(VARIABLES[v] for v in self.variables)
+
+    @property
+    def filename(self) -> str:
         area_id = hashlib.md5(repr(self.area).encode()).hexdigest()[:6]
         return (
             f"era5land_{self.year}{self.month:02d}"
-            f"_d{self.days[0]:02d}-{self.days[-1]:02d}_{tag}_{area_id}.nc"
+            f"_d{self.days[0]:02d}-{self.days[-1]:02d}_{self.tag}_{area_id}.nc"
         )
 
     def to_cds(self) -> dict[str, Any]:
@@ -197,13 +201,25 @@ class CdsDownloader:
         return paths
 
 
-def cached_paths(requests: Sequence[Era5Request], target_dir: Path) -> list[Path]:
-    """Yuklamasdan ishlash rejimi: kerakli fayllar keshda borligini tekshiradi."""
-    paths = [Path(target_dir) / r.filename for r in requests]
-    missing = [p.name for p in paths if not p.is_file()]
-    if missing:
-        raise FileNotFoundError(
-            f"Keshda {len(missing)} ta fayl yo'q (masalan: {missing[0]}). "
-            "--skip-download siz ishga tushiring."
-        )
-    return paths
+_CACHE_NAME = re.compile(r"era5land_(\d{4})(\d{2})_d(\d{2})-(\d{2})_([a-z0-9-]+)_[0-9a-f]{6}\.nc$")
+
+
+def find_cached(request: Era5Request, cache_dir: Path) -> Path | None:
+    """So'rovni qoplaydigan keshdagi fayl: aynan shu fayl yoki shu oy uchun kattaroq
+    (ko'proq kun, ko'proq o'zgaruvchi yoki kengroq hudud) yuklangan fayl."""
+    cache_dir = Path(cache_dir)
+    exact = cache_dir / request.filename
+    if exact.is_file():
+        return exact
+    for candidate in sorted(cache_dir.glob(f"era5land_{request.year}{request.month:02d}_d*.nc")):
+        match = _CACHE_NAME.match(candidate.name)
+        if not match:
+            continue
+        first_day, last_day, tag = int(match[3]), int(match[4]), match[5]
+        if not (first_day <= request.days[0] and request.days[-1] <= last_day):
+            continue
+        if tag not in ("all", request.tag):
+            continue
+        if file_covers_area(candidate, request.area):
+            return candidate
+    return None

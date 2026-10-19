@@ -13,11 +13,12 @@ from et_reference.ingestion.era5land import (
     CdsDownloader,
     DownloadError,
     area_from_bounds,
+    find_cached,
     plan_requests,
 )
 from et_reference.timeutils import iter_months, utc_day_span
 
-from .synthetic import synthetic_hourly
+from .synthetic import grid_for_area, synthetic_hourly
 
 AREA = (45.8, 55.8, 37.0, 73.3)
 
@@ -132,6 +133,43 @@ def test_failed_month_does_not_stop_others(tmp_path):
     assert not (tmp_path / requests[1].filename).exists()
     assert (tmp_path / requests[2].filename).is_file()
     assert not list(tmp_path.glob("*.part"))
+
+
+def _write_cache_file(directory, request, lats, lons):
+    times = pd.date_range(
+        pd.Timestamp(year=request.year, month=request.month, day=request.days[0]),
+        pd.Timestamp(year=request.year, month=request.month, day=request.days[-1], hour=23),
+        freq="h",
+    )
+    synthetic_hourly(times, lats, lons).to_netcdf(directory / request.filename)
+
+
+def test_find_cached_reuses_larger_files(tmp_path):
+    country = plan_requests(date(2026, 3, 1), date(2026, 3, 31), (41.3, 68.7, 40.6, 69.5))[0]
+    _write_cache_file(tmp_path, country, *grid_for_area(country.area))
+
+    region_area = (41.2, 68.8, 40.7, 69.3)
+    assert find_cached(plan_requests(date(2026, 3, 1), date(2026, 3, 31), region_area)[0], tmp_path) == (
+        tmp_path / country.filename
+    )
+    # kamroq kun so'ralsa ham kattaroq fayl yaraydi
+    assert find_cached(plan_requests(date(2026, 3, 28), date(2026, 3, 31), region_area)[0], tmp_path)
+    # hudud qoplanmasa — yo'q
+    assert find_cached(plan_requests(date(2026, 3, 1), date(2026, 3, 31), (42.0, 68.8, 40.7, 69.3))[0], tmp_path) is None
+    # boshqa oy — yo'q
+    assert find_cached(plan_requests(date(2026, 4, 1), date(2026, 4, 30), region_area)[0], tmp_path) is None
+
+
+def test_archive_subsets_mixed_extents_to_common_grid(tmp_path):
+    big = plan_requests(date(2026, 3, 1), date(2026, 3, 1), (41.3, 68.7, 40.6, 69.5))[0]
+    small = plan_requests(date(2026, 3, 2), date(2026, 3, 2), (41.2, 68.8, 40.7, 69.3))[0]
+    _write_cache_file(tmp_path, big, *grid_for_area(big.area))
+    _write_cache_file(tmp_path, small, *grid_for_area(small.area))
+    archive = HourlyArchive([tmp_path / big.filename, tmp_path / small.filename], area=small.area)
+    loaded = archive.load(pd.Timestamp("2026-03-01"), pd.Timestamp("2026-03-02 23:00"), ["t2m"])
+    archive.close()
+    assert loaded.sizes == {"time": 48, "latitude": 6, "longitude": 6}
+    assert not loaded["t2m"].isnull().any()
 
 
 def test_normalize_new_cds_layout():

@@ -40,7 +40,14 @@ Qoraqalpogiston, Samarqand, Sirdaryo, Surxondaryo, Toshkent viloyati, Toshkent s
 
 > `hammasi` tanlansa: butun respublika rasteri va CSV da 14 ta birlikning har biri uchun alohida qatorlar chiqadi.
 
-**Birinchi ishga tushirish** ERA5-Land ma'lumotini CDS'dan yuklab oladi. Bunda vaqtning asosiy qismi CDS navbatiga ketadi. Ma'lumot `data\cache\` papkasida respublika bo'yicha bir marta saqlanadi. Keyin istalgan viloyat va shu oraliqdagi istalgan davr uchun hisob **soniyalarda** bajariladi.
+**Birinchi ishga tushirish** ERA5-Land ma'lumotini CDS'dan yuklab oladi. Bunda vaqtning asosiy qismi CDS navbatiga ketadi.
+- Faqat tanlangan viloyat hududi (0.2° zaxira bilan) yuklanadi.
+- Keshda shu oy uchun kattaroq fayl bo'lsa (masalan, `hammasi` uchun yuklangan), u qayta ishlatiladi.
+- Takroriy hisob **soniyalarda** bajariladi.
+
+> **`data\cache\era5land\*.nc` — bu natija emas, xom kesh.** Unda soatlik ERA5-Land ma'lumotlari saqlanadi va uni ochish shart emas.
+> QGIS'da har bir band bitta soatni bildiradi. Band nomidagi `valid_time` — 1970-01-01 dan beri o'tgan soniyalar (UTC).
+> Masalan, `1772323200` = 2026-03-01 00:00 UTC (Toshkent vaqti bilan 05:00).
 
 ---
 

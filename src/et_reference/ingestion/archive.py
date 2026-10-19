@@ -36,6 +36,31 @@ def normalize_era5_dataset(ds: xr.Dataset) -> xr.Dataset:
     return ds.sortby("longitude").sortby("latitude", ascending=False)
 
 
+Area = tuple[float, float, float, float]  # N, W, S, E
+_COORD_TOL = 0.01  # ERA5-Land koordinatalaridagi float32 shovqini uchun zaxira, gradus
+
+
+def subset_area(ds: xr.Dataset, area: Area) -> xr.Dataset:
+    """Normallashtirilgan datasetdan [N, W, S, E] hududini kesib oladi."""
+    north, west, south, east = area
+    return ds.sel(
+        latitude=slice(north + _COORD_TOL, south - _COORD_TOL),
+        longitude=slice(west - _COORD_TOL, east + _COORD_TOL),
+    )
+
+
+def file_covers_area(path: Path, area: Area) -> bool:
+    """NetCDF fayl tarmog'i [N, W, S, E] hududini to'liq qoplaydimi (faqat koordinatalar o'qiladi)."""
+    with xr.open_dataset(path) as raw:
+        ds = normalize_era5_dataset(raw)
+        lat, lon = ds["latitude"].values, ds["longitude"].values
+    north, west, south, east = area
+    return bool(
+        lat.max() >= north - _COORD_TOL and lat.min() <= south + _COORD_TOL
+        and lon.min() <= west + _COORD_TOL and lon.max() >= east - _COORD_TOL
+    )
+
+
 def _collapse_dimension(ds: xr.Dataset, dim: str) -> xr.Dataset:
     """`dim` bo'ylab birinchi NaN bo'lmagan qiymatni oladi (ERA5/ERA5T aralashmasi)."""
     result = ds.isel({dim: 0})
@@ -45,12 +70,17 @@ def _collapse_dimension(ds: xr.Dataset, dim: str) -> xr.Dataset:
 
 
 class HourlyArchive:
-    """Bir nechta oylik/o'zgaruvchili fayllar ustidan vaqt oralig'ini kesib oladi."""
+    """Bir nechta oylik/o'zgaruvchili fayllar ustidan vaqt oralig'ini kesib oladi.
 
-    def __init__(self, paths: Sequence[Path]) -> None:
+    `area` berilsa, har bir fayl shu hududga kesiladi: shunda respublika bo'yicha
+    yuklangan va viloyat bo'yicha yuklangan fayllar birga ishlatilishi mumkin.
+    """
+
+    def __init__(self, paths: Sequence[Path], area: Area | None = None) -> None:
         if not paths:
             raise FileNotFoundError("ERA5-Land fayllari berilmadi")
-        self._datasets = [normalize_era5_dataset(xr.open_dataset(p)) for p in sorted(paths)]
+        datasets = [normalize_era5_dataset(xr.open_dataset(p)) for p in sorted(set(paths))]
+        self._datasets = [subset_area(ds, area) for ds in datasets] if area else datasets
         self._check_same_grid()
 
     @property

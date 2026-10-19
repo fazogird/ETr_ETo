@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument(
         "--skip-download", action="store_true", help="faqat keshdagi ERA5-Land fayllaridan foydalanish"
     )
+    check.add_argument("--viloyat", help="viloyat nomi (masalan: Fargona) yoki 'hammasi'")
     for command in (check, run):
         command.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG)
         command.add_argument("--start", help="davr boshi YYYY-MM-DD")
@@ -47,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Sozlamalar xatosi: {exc}", file=sys.stderr)
         return 2
     _configure_logging(settings, to_file=False)
-    return _check(settings)
+    return _check(settings, args.viloyat)
 
 
 def run_command(
@@ -81,8 +82,10 @@ def run_command(
     return 0
 
 
-def _check(settings: Settings) -> int:
+def _check(settings: Settings, viloyat: str | None = None) -> int:
+    from .ingestion.era5land import find_cached
     from .pipeline import load_admin_units, plan
+    from .regions import select_units
 
     log.info("Davr: %s … %s (%s)", settings.period.start, settings.period.end, settings.region.timezone)
     log.info("Kesh: %s | Natijalar: %s", settings.paths.cache, settings.paths.output)
@@ -94,16 +97,19 @@ def _check(settings: Settings) -> int:
 
     try:
         units = load_admin_units(settings)
+        selected, label = select_units(units, viloyat)
     except (OSError, ValueError) as exc:
         log.error("Chegaralar: %s", exc)
         return 1
-    requests = plan(settings, units)
-    cached = sum((settings.paths.hourly / r.filename).is_file() for r in requests)
-    log.info("Chegaralar: %d ta birlik, CRS=%s", len(units), units.crs.to_string())
-    log.info("CDS hududi [N, W, S, E]: %s", list(requests[0].area))
-    log.info("CDS so'rovlari: %d ta (keshda %d ta, yuklanadi %d ta)", len(requests), cached, len(requests) - cached)
-    for request in requests:
-        status = "kesh" if (settings.paths.hourly / request.filename).is_file() else "yuklanadi"
+    requests = plan(settings, selected)
+    log.info("Chegaralar: %d ta birlik, CRS=%s | tanlangan: %s", len(units), units.crs.to_string(), label)
+    log.info("Yuklash hududi [N, W, S, E]: %s", list(requests[0].area))
+    statuses = [
+        "kesh" if settings.paths.hourly.is_dir() and find_cached(r, settings.paths.hourly) else "yuklanadi"
+        for r in requests
+    ]
+    log.info("CDS so'rovlari: %d ta (keshda %d ta)", len(requests), statuses.count("kesh"))
+    for request, status in zip(requests, statuses):
         log.info("  %d-%02d kunlar %02d–%02d  [%s]", request.year, request.month,
                  request.days[0], request.days[-1], status)
     return 0
