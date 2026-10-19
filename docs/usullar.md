@@ -283,22 +283,24 @@ ETo = ETsz(Cn=900,  Cd=0.34),  ETr = ETsz(Cn=1600, Cd=0.38)
 
 Hajm: taxminan 15 ming piksel × 214 kun ≈ 3 mln qiymat. NumPy bilan bu soniyalarda hisoblanadi. Asosiy vaqt CDS dan yuklab olishga ketadi, keyin hammasi lokal keshdan o'qiladi.
 
-### 8.6 Natija: oylik rasterlar
+### 8.6 Natija: oylik rasterlar va viloyat jadvali
 
 | Parametr | Qiymat |
 |---|---|
-| Format | GeoTIFF: float32, DEFLATE siqish, tiled (COG ga mos) |
+| Format | GeoTIFF: float32, DEFLATE siqish |
 | CRS | **EPSG:4326** (WGS 84) |
 | Piksel | 0.1° × 0.1°. Transform: chap yuqori burchak = (lon_min − 0.05, lat_max + 0.05), shimol tepada |
 | NoData | −9999 |
 | Qiymat | **mm/oy** (kunlik ETo/ETr yig'indisi) |
-| Fayllar | `ETo_2026_03.tif` … `ETo_2026_09.tif`, `ETr_2026_03.tif` … `ETr_2026_09.tif`, `valid_days_2026_MM.tif` |
-| Niqob | O'zbekiston chegarasi (ADM1 birlashmasi), `all_touched=True`, ya'ni chegaradagi piksellar ham saqlanadi |
+| Fayllar | `<Viloyat>_ETo_2026_03.tif` …, `<Viloyat>_ETr_2026_03.tif` …, `<Viloyat>_ETo_ETr_oylik.csv` |
+| Hudud | Tanlangan viloyat chegarasi atrofida 1 piksel zaxira bilan kesiladi. Niqob `all_touched=True`, ya'ni chegaradagi piksellar ham saqlanadi |
 
-**Lokalda shp ga yozishda (zonal statistika):**
+**Viloyat o'rtachasi (CSV).** Bu yerda shp/zonal statistika kerak emas, o'rtacha avtomatik hisoblanadi:
 - 0.1° piksel 41° kenglikda ≈ 11.1 × 8.4 km ≈ 93 km². **Toshkent shahri** atigi bir necha pikseldan iborat.
-- Shuning uchun piksel markazi usuli o'rniga **qoplanish ulushi bo'yicha vaznli o'rtacha** tavsiya etiladi (`exactextract` yoki `rasterstats` + `all_touched`). Aks holda kichik birliklar uchun natija noaniq bo'ladi yoki umuman chiqmaydi.
-- Maydon hisoblash kerak bo'lsa, teng maydonli proyeksiyadan foydalaning (masalan, EPSG:6933). EPSG:4326 dagi gradus maydon emas.
+- Shu sababli "piksel markazi" usuli ishlatilmaydi. Har bir piksel 10 × 10 mayda katakka bo'linadi va uning **poligon ichidagi ulushi** hisoblanadi (aniqligi ~1%).
+- Vazn = ulush × cos(kenglik): EPSG:4326 da piksel maydoni kenglikka qarab kichrayadi.
+- Formula: o'rtacha = Σ(vazn · qiymat) / Σ(vazn). NoData piksellar hisobga olinmaydi.
+- `asl_malumot_foiz` ustuni oy kunlarining necha foizi to'ldirilmagan, asl ma'lumotga asoslanganini ko'rsatadi (maydon bo'yicha vaznli).
 
 ### 8.7 Validatsiya rejasi
 

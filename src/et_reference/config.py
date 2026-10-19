@@ -74,7 +74,7 @@ class Paths:
 
     @property
     def rasters(self) -> Path:
-        return self.output / "rasters"
+        return self.output
 
     @property
     def logs(self) -> Path:

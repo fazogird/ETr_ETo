@@ -1,4 +1,4 @@
-"""Orkestrator: chegaralar → ERA5-Land → kunlik QC → ETo/ETr → oylik rasterlar."""
+"""Orkestrator: chegaralar → ERA5-Land → kunlik QC → ETo/ETr → oylik rasterlar va jadval."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from . import __version__
 from .aggregation.temporal import days_per_month, monthly_counts, monthly_totals
+from .aggregation.zonal import area_weights, coverage_fraction, weighted_mean
 from .calculations import DAILY_SURFACES, daily_reference_et
 from .calculations.atmosphere import pressure_altitude, saturation_vapor_pressure
 from .calculations.wind import wind_at_2m
@@ -25,8 +27,10 @@ from .ingestion.archive import HourlyArchive
 from .ingestion.boundaries import download_geoboundaries, load_boundaries
 from .ingestion.era5land import CdsDownloader, Era5Request, area_from_bounds, plan_requests
 from .output.rasters import GridSpec, grid_from_coords, region_mask, write_geotiff
+from .output.tables import with_totals, write_table
 from .preprocessing.daily import build_daily
 from .preprocessing.quality import apply_wind_floor, run_quality_control
+from .regions import crop_to_units, select_units, unit_label
 from .timeutils import utc_day_span
 
 log = logging.getLogger(__name__)
@@ -38,10 +42,21 @@ METHOD = "ASCE-EWRI (2005) standardized Penman-Monteith, daily time step"
 @dataclass(frozen=True)
 class RunResult:
     rasters: list[Path]
+    table_file: Path
     summary_file: Path
+    table: pd.DataFrame
 
 
-def load_region(settings: Settings) -> gpd.GeoDataFrame:
+@dataclass(frozen=True)
+class MonthlyFields:
+    """Oylik maydonlar: (oy, lat, lon)."""
+
+    totals: dict[str, xr.DataArray]  # ETo/ETr, mm/oy
+    days: xr.DataArray  # oydagi kunlar soni (oy,)
+    original_share: xr.DataArray  # asl (to'ldirilmagan) ma'lumotli kunlar ulushi
+
+
+def load_admin_units(settings: Settings) -> gpd.GeoDataFrame:
     region = settings.region
     if region.boundaries_file is not None:
         return load_boundaries(region.boundaries_file)
@@ -49,9 +64,10 @@ def load_region(settings: Settings) -> gpd.GeoDataFrame:
     return load_boundaries(path)
 
 
-def plan(settings: Settings, region: gpd.GeoDataFrame) -> list[Era5Request]:
+def plan(settings: Settings, units: gpd.GeoDataFrame) -> list[Era5Request]:
+    """Respublika bo'yicha bitta kesh: istalgan viloyat va davr shu fayllardan olinadi."""
     area = settings.region.area or area_from_bounds(
-        region.total_bounds, settings.region.area_buffer_deg
+        units.total_bounds, settings.region.area_buffer_deg
     )
     first_day, last_day = utc_day_span(
         settings.period.start, settings.period.end, settings.region.timezone
@@ -108,22 +124,37 @@ def compute_daily_et(daily: xr.Dataset, min_wind_speed: float) -> dict[str, xr.D
     }
 
 
+def monthly_fields(
+    daily_et: dict[str, xr.DataArray], original_valid: xr.DataArray, min_valid_fraction: float
+) -> MonthlyFields:
+    first = next(iter(daily_et.values()))
+    days = days_per_month(first)
+    original = monthly_counts(original_valid & first.notnull())
+    return MonthlyFields(
+        totals={name: monthly_totals(da, min_valid_fraction) for name, da in daily_et.items()},
+        days=days,
+        original_share=original / days,
+    )
+
+
 def run(
     settings: Settings,
     *,
+    region: str | None = None,
     download: bool = True,
     client_factory: Callable[..., Any] | None = None,
 ) -> RunResult:
+    """`region`: viloyat nomi ("Fargona", "Toshkent shahri", ...) yoki None/"hammasi"."""
     started = datetime.now(timezone.utc)
+    units = load_admin_units(settings)
+    selected, label = select_units(units, region)
     log.info(
-        "Davr: %s … %s | vaqt zonasi: %s",
-        settings.period.start, settings.period.end, settings.region.timezone,
+        "Hudud: %s | davr: %s … %s | vaqt zonasi: %s",
+        label, settings.period.start, settings.period.end, settings.region.timezone,
     )
-    region = load_region(settings)
-    requests = plan(settings, region)
-    log.info("Hudud: %d ta birlik; CDS hududi [N, W, S, E] = %s", len(region), list(requests[0].area))
-
+    requests = plan(settings, units)
     files = obtain_hourly_files(settings, requests, download=download, client_factory=client_factory)
+
     archive = HourlyArchive(files)
     try:
         daily = build_daily(
@@ -135,101 +166,98 @@ def run(
         )
     finally:
         archive.close()
+    if len(selected) < len(units):
+        daily = crop_to_units(daily, selected)
 
     latitude = daily["latitude"].values
     filled, original_valid, report = run_quality_control(
         daily, latitude, settings.quality.max_gap_days
     )
     daily_et = compute_daily_et(filled, settings.quality.min_wind_speed)
+    fields = monthly_fields(daily_et, original_valid, settings.quality.min_valid_fraction)
 
     grid = grid_from_coords(latitude, daily["longitude"].values)
     if settings.output.mask_to_region:
-        inside = region_mask(region.geometry, grid, settings.output.all_touched)
+        inside = region_mask(selected.geometry, grid, settings.output.all_touched)
     else:
         inside = np.ones((grid.height, grid.width), dtype=bool)
 
-    rasters, monthly_stats = write_monthly_rasters(
-        settings, daily_et, original_valid, grid, inside
-    )
+    rasters = write_monthly_rasters(settings, label, fields, grid, inside)
+    table = regional_table(selected, grid, latitude, fields)
+    table_file = write_table(table, settings.paths.output / f"{label}_ETo_ETr_oylik.csv")
     summary_file = write_summary(
-        settings, requests, files, grid, report.as_dict(), monthly_stats, rasters, started
+        settings, label, requests, files, grid, report.as_dict(), table, rasters, started
     )
-    log.info("Tayyor: %d ta raster -> %s", len(rasters), settings.paths.rasters)
-    return RunResult(rasters=rasters, summary_file=summary_file)
+    _log_table(table)
+    log.info("Tayyor: %d ta raster va jadval -> %s", len(rasters), settings.paths.output)
+    return RunResult(rasters=rasters, table_file=table_file, summary_file=summary_file, table=table)
 
 
 def write_monthly_rasters(
-    settings: Settings,
-    daily_et: dict[str, xr.DataArray],
-    original_valid: xr.DataArray,
-    grid: GridSpec,
-    inside: np.ndarray,
-) -> tuple[list[Path], list[dict[str, Any]]]:
-    nodata = settings.output.nodata
-    min_fraction = settings.quality.min_valid_fraction
-    totals = {name: monthly_totals(da, min_fraction) for name, da in daily_et.items()}
-    first = next(iter(daily_et.values()))
-    valid_days = monthly_counts(original_valid & first.notnull())
-    n_days = days_per_month(first)
+    settings: Settings, label: str, fields: MonthlyFields, grid: GridSpec, inside: np.ndarray
+) -> list[Path]:
     surfaces = {s.name: s for s in DAILY_SURFACES}
-
     rasters: list[Path] = []
-    stats: list[dict[str, Any]] = []
-    for i, month in enumerate(valid_days["time"].values):
+    for i, month in enumerate(fields.days["time"].values):
         stamp = np.datetime_as_string(month, unit="M")  # YYYY-MM
-        suffix = stamp.replace("-", "_")
-        common_tags = {
-            "MONTH": stamp,
-            "DAYS_IN_MONTH": int(n_days.values[i]),
-            "SOURCE": "ERA5-Land hourly reanalysis (Copernicus CDS)",
-            "TIMEZONE": settings.region.timezone,
-            "SOFTWARE": f"et-reference {__version__}",
-        }
-        month_stats: dict[str, Any] = {"month": stamp}
-        for name, total in totals.items():
+        for name, total in fields.totals.items():
             surface = surfaces[name]
             values = np.where(inside, total.isel(time=i).values, np.nan)
-            path = settings.paths.rasters / f"{name}_{suffix}.tif"
+            path = settings.paths.rasters / f"{label}_{name}_{stamp.replace('-', '_')}.tif"
             write_geotiff(
-                path, values, grid, nodata=nodata,
+                path, values, grid, nodata=settings.output.nodata,
                 description=f"{name} {stamp} [mm/month]",
                 tags={
-                    **common_tags,
+                    "REGION": label,
                     "VARIABLE": name,
                     "UNITS": "mm/month",
+                    "MONTH": stamp,
+                    "DAYS": int(fields.days.values[i]),
                     "METHOD": METHOD,
                     "REFERENCE_SURFACE": f"Cn={surface.cn:g}, Cd={surface.cd:g}",
+                    "SOURCE": "ERA5-Land hourly reanalysis (Copernicus CDS)",
+                    "TIMEZONE": settings.region.timezone,
+                    "SOFTWARE": f"et-reference {__version__}",
                 },
             )
             rasters.append(path)
-            month_stats[f"{name}_mean_mm"] = _nanmean(values)
+    return rasters
 
-        days = np.where(inside, valid_days.isel(time=i).values, np.nan)
-        path = settings.paths.rasters / f"valid_days_{suffix}.tif"
-        write_geotiff(
-            path, days, grid, nodata=nodata, dtype="int16",
-            description=f"valid days {stamp}",
-            tags={**common_tags, "VARIABLE": "valid_days", "UNITS": "days"},
-        )
-        rasters.append(path)
 
-        if month_stats.get("ETo_mean_mm"):
-            month_stats["ETr_to_ETo"] = round(month_stats["ETr_mean_mm"] / month_stats["ETo_mean_mm"], 3)
-        stats.append(month_stats)
-        log.info(
-            "%s: hudud piksellari o'rtachasi ETo = %s mm, ETr = %s mm",
-            stamp, month_stats.get("ETo_mean_mm"), month_stats.get("ETr_mean_mm"),
-        )
-    return rasters, stats
+def regional_table(
+    units: gpd.GeoDataFrame, grid: GridSpec, latitude: np.ndarray, fields: MonthlyFields
+) -> pd.DataFrame:
+    """Har bir birlik va oy uchun maydon-vaznli o'rtacha ETo/ETr [mm]."""
+    rows = []
+    for _, unit in units.iterrows():
+        weights = area_weights(latitude, coverage_fraction([unit.geometry], grid))
+        name = unit_label(unit)
+        for i, month in enumerate(fields.days["time"].values):
+            eto = weighted_mean(fields.totals["ETo"].isel(time=i).values, weights)
+            etr = weighted_mean(fields.totals["ETr"].isel(time=i).values, weights)
+            days = int(fields.days.values[i])
+            rows.append({
+                "viloyat": name,
+                "oy": np.datetime_as_string(month, unit="M"),
+                "kunlar": days,
+                "ETo_mm": eto,
+                "ETr_mm": etr,
+                "ETo_mm_kun": eto / days,
+                "ETr_mm_kun": etr / days,
+                "ETr_ETo": etr / eto if eto else float("nan"),
+                "asl_malumot_foiz": 100.0 * weighted_mean(fields.original_share.isel(time=i).values, weights),
+            })
+    return with_totals(pd.DataFrame(rows))
 
 
 def write_summary(
     settings: Settings,
+    label: str,
     requests: list[Era5Request],
     files: list[Path],
     grid: GridSpec,
     quality: dict[str, Any],
-    monthly_stats: list[dict[str, Any]],
+    table: pd.DataFrame,
     rasters: list[Path],
     started: datetime,
 ) -> Path:
@@ -238,6 +266,7 @@ def write_summary(
         "software": f"et-reference {__version__}",
         "started_utc": started.isoformat(timespec="seconds"),
         "finished_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "region": label,
         "period": {"start": str(settings.period.start), "end": str(settings.period.end)},
         "timezone": settings.region.timezone,
         "method": METHOD,
@@ -250,15 +279,18 @@ def write_summary(
         },
         "era5land_files": [p.name for p in files],
         "quality_control": quality,
-        "monthly_region_pixel_means": monthly_stats,
+        "table": json.loads(table.round(3).to_json(orient="records", force_ascii=False)),
         "rasters": [p.name for p in rasters],
     }
-    path = settings.paths.output / "run_summary.json"
+    path = settings.paths.output / f"{label}_hisobot.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-def _nanmean(values: np.ndarray) -> float | None:
-    finite = values[np.isfinite(values)]
-    return round(float(finite.mean()), 2) if finite.size else None
+def _log_table(table: pd.DataFrame) -> None:
+    for row in table.itertuples(index=False):
+        log.info(
+            "%-28s %-8s ETo = %7.1f mm   ETr = %7.1f mm   (ETr/ETo = %.2f)",
+            row.viloyat, row.oy, row.ETo_mm, row.ETr_mm, row.ETr_ETo,
+        )
