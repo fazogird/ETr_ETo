@@ -1,0 +1,38 @@
+# ETo/ETr hisoblash sozlamalari.
+# Nisbiy yo'llar `paths.root` ga nisbatan; `paths.root` esa shu fayl turgan papkaga nisbatan.
+
+period:
+  start: 2026-03-01
+  end: 2026-09-30
+
+region:
+  country_iso3: UZB
+  adm_level: ADM1
+  boundaries_file: null        # o'z shp/geojson faylingiz bo'lsa, yo'lini yozing
+  area: null                   # [N, W, S, E]; null bo'lsa chegaralardan avtomatik olinadi
+  area_buffer_deg: 0.2
+  timezone: Asia/Tashkent
+
+cds:
+  dataset: reanalysis-era5-land
+  # Kalit FAYLI yoki PAPKASI ko'rsatiladi. Kalitning o'zi bu yerga yozilmaydi!
+  # Bo'sh qoldirilsa: CDSAPI_RC muhit o'zgaruvchisi, keyin ~/.cdsapirc qidiriladi.
+  credentials: 'D:\Cloud_comp\additional_task_claude_github\keys\cds.climate.copernicus.eu'
+  split_by_variable: false     # CDS so'rov hajmi bo'yicha rad etsa, true qiling
+  ssrd_mode: auto              # auto | accumulated | hourly
+
+quality:
+  max_gap_days: 3              # shundan qisqa bo'shliqlar chiziqli interpolyatsiya qilinadi
+  min_valid_fraction: 0.9      # oyda kamida 90% kun bo'lmasa, piksel NoData
+  min_wind_speed: 0.5          # u2 uchun pastki chegara, m/s (FAO-56)
+  min_hours_per_day: 24        # to'liq bo'lmagan kunlar yaroqsiz
+
+output:
+  nodata: -9999
+  all_touched: true            # chegaraga tegib turgan piksellar ham saqlanadi
+  mask_to_region: true
+
+paths:
+  root: ..
+  cache: data/cache
+  output: outputs

@@ -1,0 +1,25 @@
+# Windows uchun tavsiya etilgan muhit (conda-forge GDAL/rasterio ni ishonchli o'rnatadi):
+#   conda env create -f environment.yml
+#   conda activate et-reference
+name: et-reference
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - tzdata
+  - xarray
+  - netcdf4
+  - rasterio
+  - geopandas
+  - pyogrio
+  - shapely
+  - pyyaml
+  - requests
+  - pytest
+  - pip
+  - pip:
+      - cdsapi>=0.7.2
+      - refet
+      - -e .

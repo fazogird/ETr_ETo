@@ -215,9 +215,20 @@ Farq ≤ 0.001 mm. Sababi kichik konstantalarda (σ: 4.901·10⁻⁹ va 4.903·1
 | `2m_dewpoint_temperature` | lahzalik | K | Tdew → ea (ASCE ustuvorligi bo'yicha 2-o'rinda) |
 | `10m_u_component_of_wind`, `10m_v_component_of_wind` | lahzalik | m s⁻¹ | u₁₀ = √(u² + v²) → u₂ |
 | `surface_solar_radiation_downwards` | **yig'ilgan, 00 UTC dan** | J m⁻² | Rs |
-| `geopotential` (o'zgarmas maydon) | statik | m² s⁻² | z = Φ/9.80665 → P, Rso |
+| `surface_pressure` | lahzalik | Pa | z (bosim balandligi) → P, Rso |
 
-> Balandlik uchun ERA5-Land ning **o'z orografiyasi** olinadi, tashqi DEM emas. Sababi: harorat maydonlari aynan shu model relyefiga mos. Agar DEM olinsa, piksel ichidagi relyef nomuvofiqligi P va Rso ga ortiqcha xato qo'shadi.
+> **Balandlik qanday olinadi.** Davr bo'yicha o'rtacha sirt bosimi `sp` dan standart formulaning teskarisi bilan **bosim balandligi** hisoblanadi:
+>
+> z = (293/0.0065)·[1 − (P/101.3)^(1/5.26)]
+>
+> Keyin standart shakl bo'yicha P(z) va Rso(z) hisoblanadi.
+>
+> Bu usulning uchta afzalligi bor:
+> 1. z ERA5-Land ning **o'z model relyefiga** mos keladi, harorat maydonlari ham aynan shu relyefda hisoblangan. Tashqi DEM olinsa, piksel ichidagi relyef nomuvofiqligi xato qo'shadi.
+> 2. γ haqiqiy o'rtacha bosimdan olinadi.
+> 3. Statik geopotensial faylini alohida yuklash shart emas.
+>
+> Rso ga ta'siri juda kichik: 100 m farq Rso ni ~0.3% o'zgartiradi.
 
 Yuklab olish oralig'i **2026-02-28 … 2026-09-30 (UTC)** qilib olinadi. Sababi: mahalliy 1-mart kuni UTC bo'yicha 28-fevral soat 19:00 da boshlanadi.
 Ma'lumot mavjudligi (sentabr oxiri) ishga tushirishda avtomatik tekshiriladi.
@@ -238,6 +249,7 @@ Ma'lumot mavjudligi (sentabr oxiri) ishga tushirishda avtomatik tekshiriladi.
    - Tdew = o'rtacha(Tdew_soatlik)
    - Rs = Σ soatlik / 10⁶ [MJ m⁻² d⁻¹]
    - u₁₀ = o'rtacha(√(u² + v²))
+   - sp = o'rtacha(sp_soatlik) / 1000 [kPa]
    - ⚠️ Shamol tezligi **avval soatlik** hisoblanadi, keyin o'rtacha olinadi. Teskari tartibda (o'rtacha u va o'rtacha v dan tezlik) shamol sistematik ravishda **kamayib** chiqadi.
 5. **Birliklar:** K → °C (−273.15). u₂ = 0.748·u₁₀.
 
@@ -260,6 +272,7 @@ Ma'lumot mavjudligi (sentabr oxiri) ishga tushirishda avtomatik tekshiriladi.
 Har bir piksel va har bir kun uchun (`formulalar.md`, 1–5-bo'limlar):
 
 ```
+z = bosim_balandligi(o'rtacha sp)
 T = (Tmax+Tmin)/2 → P(z) → γ → Δ(T) → es, ea = e°(Tdew) → VPD
 J, φ → δ, dr, ωs → Ra → Rso = (0.75 + 2e-5·z)·Ra → fcd → Rnl → Rn = 0.77·Rs − Rnl
 u2 = 0.748·u10

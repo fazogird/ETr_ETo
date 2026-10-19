@@ -1,0 +1,19 @@
+# --- Maxfiy kalitlar: HECH QACHON commit qilinmaydi ---
+keys/
+.cdsapirc
+*.cdsapirc
+cdsapirc*
+
+# --- Lokal ma'lumotlar va natijalar ---
+data/
+outputs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
